@@ -119,18 +119,18 @@ local_GetupTimer(client) {
 }
 public Action:GetupTimer(Handle:timer, any:client) {
     if (currentSequence[client] == 0) {
-        PrintToChat(1, "Player %d is getting up...", client);
+        LogMessage("Player %d is getting up...", client);
         currentSequence[client] = GetEntProp(client, Prop_Send, "m_nSequence");
-        PrintToChat(1, "(Sequence number: %d)", currentSequence[client]);
+        LogMessage("(Sequence number: %d)", currentSequence[client]);
         return Plugin_Continue;
     } else if (interrupt[client]) {
-        PrintToChat(1, "Player %d's getup was interrupted!", client);
+        LogMessage("Player %d's getup was interrupted!", client);
         interrupt[client] = false;
         return Plugin_Stop;
     } else if (currentSequence[client] == GetEntProp(client, Prop_Send, "m_nSequence")) {
         return Plugin_Continue;
     }
-    PrintToChat(1, "Player %d finished getting up. (sequence %d)", client, currentSequence[client]);
+    LogMessage("Player %d finished getting up. (sequence %d)", client, currentSequence[client]);
     currentSequence[client] = 0;
     playerState[client] = PlayerState:NONE;
     pendingGetups[client]--;
@@ -142,7 +142,7 @@ local_CancelGetup(client) {
     CreateTimer(ONE_FRAME, CancelGetup, client, TIMER_REPEAT);
 }
 public Action:CancelGetup(Handle:timer, any:client) {
-    PrintToChat(1, "Player %d has %d pending getups.", client, pendingGetups[client]);
+    LogMessage("Player %d has %d pending getups.", client, pendingGetups[client]);
     if (pendingGetups[client] > 0) {
         pendingGetups[client]--;
         SetEntPropFloat(client, Prop_Send, "m_flCycle", 1000.0);
