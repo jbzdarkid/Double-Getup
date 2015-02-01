@@ -1,0 +1,15 @@
+* Jockeys have not been tested
+* Incaps while getting up have not been tested
+
+Hunter getup + smoker: Player does hunter getup after being cleared.
+Hunter getup + punch: No action
+Hunter getup + rock: No action
+Charger getup + punch: Player does charger getup after punch getup.
+Charger getup + rock: Player does rock getup after charger getup.
+Charger getup + smoker: No action
+Tank punch + hunter:
+Tank punch + charger:
+Tank punch + smoker: No action
+Tank rock + hunter:
+Tank rock + charger:
+Tank rock + smoker: No action
