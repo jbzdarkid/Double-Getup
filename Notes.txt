@@ -13,3 +13,8 @@ Tank punch + smoker: No action
 Tank rock + hunter:
 Tank rock + charger:
 Tank rock + smoker: No action
+
+
+Grim says: Proxy -> Charged -> Tank rock
+
+Test: Tank rock on charged player

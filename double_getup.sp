@@ -1,3 +1,6 @@
+// Possible hack (if too many things to find):
+// After each key event (capper clear) process 0 or 1 animations and then skip animations until we reach "no animation".
+
 #include <sourcemod>
 #define ONE_FRAME 0.015
 #define DEBUG true
@@ -8,7 +11,7 @@ public Plugin:myinfo =
     author = "Darkid, with code adaptations from l4d2_getupfix.sp",
     description = "When an event causes you to have a getup while in the middle of a getup, you have two getups.",
     version = "1.0",
-    url = "none"
+    url = "https://github.com/jbzdarkid/Double-Getup"
 }
 
 /* Known double-getups:
@@ -56,21 +59,29 @@ public player_round_start(Handle:event, const String:name[], bool:dontBroadcast)
 
 public tongue_grab(Handle:event, const String:name[], bool:dontBroadcast) {
     new client = GetClientOfUserId(GetEventInt(event, "victim"));
-    if (playerState[client] != PlayerState:HUNTER_GETUP) return;
+    if (playerState[client] != PlayerState:HUNTER_GETUP) {
+        playerState[client] = PlayerState:SMOKER_PULL;
+        return;
+    }
     playerState[client] = PlayerState:SMOKER_PULL;
     interrupt[client] = true;
 }
 
 public smoker_clear(Handle:event, const String:name[], bool:dontBroadcast) {
     new client = GetClientOfUserId(GetEventInt(event, "victim"));
-    if (playerState[client] == PlayerState:INCAPPED) return;
+    if (playerState[client] == PlayerState:INCAPPED) {
+        playerState[client] = PlayerState:NONE;
+        return;
+    }
     playerState[client] = PlayerState:NONE;
     local_CancelGetup(client);
 }
 
 public hunter_clear(Handle:event, const String:name[], bool:dontBroadcast) {
     new client = GetClientOfUserId(GetEventInt(event, "victim"));
-    if (playerState[client] == PlayerState:INCAPPED) return;
+    if (playerState[client] == PlayerState:INCAPPED) {
+        return;
+    }
     playerState[client] = PlayerState:HUNTER_GETUP;
     pendingGetups[client]++;
     local_GetupTimer(client)
@@ -78,7 +89,9 @@ public hunter_clear(Handle:event, const String:name[], bool:dontBroadcast) {
 
 public charger_clear(Handle:event, const String:name[], bool:dontBroadcast) {
     new client = GetClientOfUserId(GetEventInt(event, "victim"));
-    if (playerState[client] == PlayerState:INCAPPED) return;
+    if (playerState[client] == PlayerState:INCAPPED) {
+        return;
+    }
     playerState[client] = PlayerState:CHARGER_GETUP;
     pendingGetups[client]++;
     local_GetupTimer(client)
