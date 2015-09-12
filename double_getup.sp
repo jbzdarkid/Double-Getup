@@ -1,6 +1,3 @@
-// Possible hack (if too many things to find):
-// After each key event (capper clear) process 0 or 1 animations and then skip animations until we reach "no animation".
-
 #include <sourcemod>
 #define ONE_FRAME 0.015
 #define DEBUG true
