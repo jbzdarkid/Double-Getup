@@ -8,7 +8,6 @@
 // Charger and tank rock *
 
 // To test
-// (Promod only) Incap while standing up from charge. -- Ent_create ability_spit or spitter_projectile
 // Insta-clear charger on a hunter getup.
 // Tank Punch during charger getup.
 
@@ -32,7 +31,7 @@ public OnPluginStart() {
     HookEvent("tongue_grab", smoker_land);
     HookEvent("tongue_release", smoker_clear);
     HookEvent("pounce_stopped", hunter_clear);
-    HookEvent("charger_carry_start", charger_land);
+    HookEvent("charger_carry_end", charger_land);
     HookEvent("charger_pummel_start", charger_pummel_start);
     HookEvent("charger_pummel_end", charger_clear);
     HookEvent("player_incapacitated", player_incap);
@@ -114,6 +113,11 @@ public hunter_clear(Handle:event, const String:name[], bool:dontBroadcast) {
 // If a player is cleared from a charger, they should have 1 getup.
 public charger_land(Handle:event, const String:name[], bool:dontBroadcast) {
     new client = GetClientOfUserId(GetEventInt(event, "victim"));
+    // If the player is incapped when the charger lands, they will getup after being revived.
+    if (playerState[client] == PlayerState:INCAPPED) {
+        PrintToChat(1, "Player %d was incapped when the charger landed", client);
+        pendingGetups[client]++;
+    }
     playerState[client] = PlayerState:INSTACHARGED;
 }
 
@@ -134,12 +138,11 @@ public charger_clear(Handle:event, const String:name[], bool:dontBroadcast) {
 // If a player is incapped, mark that down. This will interrupt their animations, if they have any.
 public player_incap(Handle:event, const String:name[], bool:dontBroadcast) {
     new client = GetClientOfUserId(GetEventInt(event, "userid"));
-    // If a player is instacleared from a charger, but still incaps, they will getup after being revived.
+    // If the player is incapped when the charger lands, they will getup after being revived.
     if (playerState[client] == PlayerState:INSTACHARGED) {
         pendingGetups[client]++;
     }
     playerState[client] = PlayerState:INCAPPED;
-    if (DEBUG) PrintToChat(1, "Player %d was incapped.", client);
     // if (pendingGetups[client] > 0) {
     //     interrupt[client] = true;
     // }
