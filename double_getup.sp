@@ -87,7 +87,7 @@ public OnClientPostAdminCheck(client)
 }
 
 public round_start(Handle:event, const String:name[], bool:dontBroadcast) {
-    for (new client=0; client<MaxClients; client++) {
+    for (new client=1; client<=MaxClients; client++) {
         playerState[client] = PlayerState:UPRIGHT;
     }
 }
