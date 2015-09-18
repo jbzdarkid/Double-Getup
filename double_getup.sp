@@ -1,12 +1,11 @@
-// *** Solved
-// Charger self-clear (level) and incap
-// Hunter & smoker
-// Insta-clear hunter
-// Charger and tank rock
-// Tank Punch during charger getup.
+// Possible getups:
+// Charger clear which still incaps
+// Smoker pull on a Hunter getup
+// Insta-clear hunter during any getup
+// Tank rock on a charger getup
+// Tank punch on a charger getup
 
-// To test
-// Insta-clear charger on a hunter getup.
+// Tank punch on a double-charge getup
 
 #include <sourcemod>
 #include <sdkhooks>
@@ -18,17 +17,18 @@ public Plugin:myinfo =
     name = "L4D2 Get-Up Fix",
     author = "Darkid",
     description = "Fixes the problem when, after completing a getup animation, you have another one.",
-    version = "2.3",
+    version = "2.4",
     url = "https://github.com/jbzdarkid/Double-Getup"
 }
 
 public OnPluginStart() {
-    HookEvent("player_entered_start_area", player_round_start);
+    HookEvent("round_start", round_start);
     HookEvent("tongue_grab", smoker_land);
     HookEvent("tongue_release", smoker_clear);
     HookEvent("pounce_stopped", hunter_clear);
-    HookEvent("charger_carry_end", charger_land);
-    HookEvent("charger_pummel_start", charger_pummel_start);
+    HookEvent("charger_impact", double_charge);
+    HookEvent("charger_carry_end", charger_land_instant);
+    HookEvent("charger_pummel_start", charger_land);
     HookEvent("charger_pummel_end", charger_clear);
     HookEvent("player_incapacitated", player_incap);
     HookEvent("revive_success", player_revive);
@@ -42,6 +42,7 @@ enum PlayerState {
     INSTACHARGED,
     CHARGED,
     CHARGER_GETUP,
+    DOUBLE_CHARGED,
     TANK_PUNCH_GETUP,
     TANK_ROCK_GETUP,
 }
@@ -51,15 +52,31 @@ new interrupt[MAXPLAYERS] = false; // If the player was getting up, and that get
 new currentSequence[MAXPLAYERS] = 0; // Kept to track when a player changes sequences, i.e. changes animations.
 new PlayerState:playerState[MAXPLAYERS] = PlayerState:UPRIGHT; // Since there are multiple sequences for each animation, this acts as a simpler way to track a player's state.
 
+// If the player is in any of the getup states.
 public bool:isGettingUp(any:client) {
     switch (playerState[client]) {
-    case (PlayerState:UPRIGHT):
-        return false;
-    case (PlayerState:INCAPPED):
-        return false;
-    case (PlayerState:SMOKED):
-        return false;
+    case (PlayerState:HUNTER_GETUP):
+        return true;
+    case (PlayerState:CHARGER_GETUP):
+        return true;
+    case (PlayerState:DOUBLE_CHARGED):
+    return true;
+    case (PlayerState:TANK_PUNCH_GETUP):
+        return true;
+    case (PlayerState:TANK_ROCK_GETUP):
+        return true;
     }
+    return false;
+}
+
+// If the player is a valid target to have a canceled getup animation.
+public bool:isValidTarget(any:client) {
+    // Occasionally the server deals damage.
+    if (client == 0) return false;
+    // Survivor
+    if (GetClientTeam(client) != 2) return false;
+    // Occasionally a bot leaves
+    if (!IsClientInGame(client)) return false;
     return true;
 }
 
@@ -69,9 +86,10 @@ public OnClientPostAdminCheck(client)
     SDKHook(client, SDKHook_OnTakeDamage, OnTakeDamage);
 }
 
-public player_round_start(Handle:event, const String:name[], bool:dontBroadcast) {
-    new client = GetClientOfUserId(GetEventInt(event, "userid"));
-    playerState[client] = PlayerState:UPRIGHT;
+public round_start(Handle:event, const String:name[], bool:dontBroadcast) {
+    for (new client=0; client<MaxClients; client++) {
+        playerState[client] = PlayerState:UPRIGHT;
+    }
 }
 
 // If a player is smoked while getting up from a hunter, the getup is interrupted.
@@ -103,8 +121,15 @@ public hunter_clear(Handle:event, const String:name[], bool:dontBroadcast) {
     _GetupTimer(client);
 }
 
+// If a player is double-charged, they should have 1 getup.
+public double_charge(Handle:event, const String:name[], bool:dontBroadcast) {
+    new client = GetClientOfUserId(GetEventInt(event, "victim"));
+    if (playerState[client] == PlayerState:INCAPPED) return;
+    playerState[client] = PlayerState:DOUBLE_CHARGED;
+}
+
 // If a player is cleared from a charger, they should have 1 getup.
-public charger_land(Handle:event, const String:name[], bool:dontBroadcast) {
+public charger_land_instant(Handle:event, const String:name[], bool:dontBroadcast) {
     new client = GetClientOfUserId(GetEventInt(event, "victim"));
     // If the player is incapped when the charger lands, they will getup after being revived.
     if (playerState[client] == PlayerState:INCAPPED) {
@@ -113,7 +138,7 @@ public charger_land(Handle:event, const String:name[], bool:dontBroadcast) {
     playerState[client] = PlayerState:INSTACHARGED;
 }
 
-public charger_pummel_start(Handle:event, const String:name[], bool:dontBroadcast) {
+public charger_land(Handle:event, const String:name[], bool:dontBroadcast) {
     new client = GetClientOfUserId(GetEventInt(event, "victim"));
     if (playerState[client] == PlayerState:INCAPPED) return;
     playerState[client] = PlayerState:CHARGED;
@@ -152,12 +177,16 @@ public Action:OnTakeDamage(victim, &attacker, &inflictor, &Float:damage, &damage
     if (strcmp(weapon, "weapon_tank_claw") == 0) {
         if (playerState[victim] == PlayerState:CHARGER_GETUP) {
             interrupt[victim] = true;
+        } else if (playerState[victim] == PlayerState:DOUBLE_CHARGED) {
+            LogMessage("[Getup] Possible double-getup, player was doublecharged and punched.");
         }
         playerState[victim] = PlayerState:TANK_PUNCH_GETUP;
         _GetupTimer(victim);
     } else if (strcmp(weapon, "tank_rock") == 0) {
         if (playerState[victim] == PlayerState:CHARGER_GETUP) {
             interrupt[victim] = true;
+        } else if (playerState[victim] == PlayerState:DOUBLE_CHARGED) {
+            LogMessage("[Getup] Possible double-getup, player was doublecharged and rocked.");
         }
         playerState[victim] = PlayerState:TANK_ROCK_GETUP;
         _GetupTimer(victim);
@@ -166,10 +195,9 @@ public Action:OnTakeDamage(victim, &attacker, &inflictor, &Float:damage, &damage
 }
 
 _GetupTimer(client) {
-    if (client == 0) return;
-    if (!IsClientInGame(client)) return;
+    if (!isValidTarget(client)) return;
     pendingGetups[client]++;
-    CreateTimer(0.04, GetupTimer, client, TIMER_REPEAT);
+    CreateTimer(0.04, GetupTimer, client, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 public Action:GetupTimer(Handle:timer, any:client) {
     if (currentSequence[client] == 0) {
@@ -196,9 +224,8 @@ public Action:GetupTimer(Handle:timer, any:client) {
 }
 
 _CancelGetup(client) {
-    if (client == 0) return;
-    if (!IsClientInGame(client)) return;
-    CreateTimer(0.04, CancelGetup, client, TIMER_REPEAT);
+    if (!isValidTarget(client)) return;
+    CreateTimer(0.04, CancelGetup, client, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 public Action:CancelGetup(Handle:timer, any:client) {
     if (pendingGetups[client] == 0) {
