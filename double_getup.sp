@@ -7,8 +7,11 @@
 
 // Tank punch on a double-charge getup
 
+
 #include <sourcemod>
 #include <sdkhooks>
+#define L4D2UTIL_STOCKS_ONLY 1
+#include <l4d2util>
 #define DEBUG true
 #pragma semicolon 1
 
@@ -17,7 +20,7 @@ public Plugin:myinfo =
     name = "L4D2 Get-Up Fix",
     author = "Darkid",
     description = "Fixes the problem when, after completing a getup animation, you have another one.",
-    version = "2.4",
+    version = "3.0",
     url = "https://github.com/jbzdarkid/Double-Getup"
 }
 
@@ -32,6 +35,7 @@ public OnPluginStart() {
     HookEvent("charger_pummel_end", charger_clear);
     HookEvent("player_incapacitated", player_incap);
     HookEvent("revive_success", player_revive);
+    InitSurvivorModelTrie(); // Not necessary, but speeds up IdentifySurvivor() calls.
 }
 
 enum PlayerState {
@@ -47,14 +51,14 @@ enum PlayerState {
     TANK_ROCK_GETUP,
 }
 
-new pendingGetups[MAXPLAYERS] = 0; // This is used to track the number of pending getups. The collective opinion is that you should have at most 1.
-new interrupt[MAXPLAYERS] = false; // If the player was getting up, and that getup is interrupted. This alows us to break out of the GetupTimer loop.
-new currentSequence[MAXPLAYERS] = 0; // Kept to track when a player changes sequences, i.e. changes animations.
-new PlayerState:playerState[MAXPLAYERS] = PlayerState:UPRIGHT; // Since there are multiple sequences for each animation, this acts as a simpler way to track a player's state.
+new pendingGetups[4] = 0; // This is used to track the number of pending getups. The collective opinion is that you should have at most 1.
+new interrupt[4] = false; // If the player was getting up, and that getup is interrupted. This alows us to break out of the GetupTimer loop.
+new currentSequence[4] = 0; // Kept to track when a player changes sequences, i.e. changes animations.
+new PlayerState:playerState[4] = PlayerState:UPRIGHT; // Since there are multiple sequences for each animation, this acts as a simpler way to track a player's state.
 
 // If the player is in any of the getup states.
-public bool:isGettingUp(any:client) {
-    switch (playerState[client]) {
+public bool:isGettingUp(any:survivor) {
+    switch (playerState[survivor]) {
     case (PlayerState:HUNTER_GETUP):
         return true;
     case (PlayerState:CHARGER_GETUP):
@@ -69,17 +73,6 @@ public bool:isGettingUp(any:client) {
     return false;
 }
 
-// If the player is a valid target to have a canceled getup animation.
-public bool:isValidTarget(any:client) {
-    // Occasionally the server deals damage.
-    if (client == 0) return false;
-    // Survivor
-    if (GetClientTeam(client) != 2) return false;
-    // Occasionally a bot leaves
-    if (!IsClientInGame(client)) return false;
-    return true;
-}
-
 // Used to check for tank rocks on players getting up from a charge.
 public OnClientPostAdminCheck(client)
 {
@@ -87,136 +80,154 @@ public OnClientPostAdminCheck(client)
 }
 
 public round_start(Handle:event, const String:name[], bool:dontBroadcast) {
-    for (new client=1; client<=MaxClients; client++) {
-        playerState[client] = PlayerState:UPRIGHT;
+    for (new survivor=0; survivor<4; survivor++) {
+        playerState[survivor] = PlayerState:UPRIGHT;
     }
 }
 
 // If a player is smoked while getting up from a hunter, the getup is interrupted.
 public smoker_land(Handle:event, const String:name[], bool:dontBroadcast) {
     new client = GetClientOfUserId(GetEventInt(event, "victim"));
-    if (playerState[client] == PlayerState:HUNTER_GETUP) {
-        interrupt[client] = true;
+    new SurvivorCharacter:survivor = IdentifySurvivor(client);
+    if (survivor == SC_NONE) return;
+    if (playerState[survivor] == PlayerState:HUNTER_GETUP) {
+        interrupt[survivor] = true;
     }
 }
 
 // If a player is cleared from a smoker, they should not have a getup.
 public smoker_clear(Handle:event, const String:name[], bool:dontBroadcast) {
     new client = GetClientOfUserId(GetEventInt(event, "victim"));
-    if (playerState[client] == PlayerState:INCAPPED) return;
-    playerState[client] = PlayerState:UPRIGHT;
+    new SurvivorCharacter:survivor = IdentifySurvivor(client);
+    if (survivor == SC_NONE) return;
+    if (playerState[survivor] == PlayerState:INCAPPED) return;
+    playerState[survivor] = PlayerState:UPRIGHT;
     _CancelGetup(client);
 }
 
 // If a player is cleared from a hunter, they should have 1 getup.
 public hunter_clear(Handle:event, const String:name[], bool:dontBroadcast) {
     new client = GetClientOfUserId(GetEventInt(event, "victim"));
-    if (playerState[client] == PlayerState:INCAPPED) return;
+    new SurvivorCharacter:survivor = IdentifySurvivor(client);
+    if (survivor == SC_NONE) return;
+    if (playerState[survivor] == PlayerState:INCAPPED) return;
     // If someone gets cleared WHILE they are otherwise getting up, they double-getup.
-    if (isGettingUp(client)) {
-        pendingGetups[client]++;
+    if (isGettingUp(survivor)) {
+        pendingGetups[survivor]++;
         return;
     }
-    playerState[client] = PlayerState:HUNTER_GETUP;
+    playerState[survivor] = PlayerState:HUNTER_GETUP;
     _GetupTimer(client);
 }
 
 // If a player is double-charged, they should have 1 getup.
 public double_charge(Handle:event, const String:name[], bool:dontBroadcast) {
-    new client = GetClientOfUserId(GetEventInt(event, "victim"));
-    if (playerState[client] == PlayerState:INCAPPED) return;
-    playerState[client] = PlayerState:DOUBLE_CHARGED;
+    new SurvivorCharacter:survivor = IdentifySurvivor(GetClientOfUserId(GetEventInt(event, "victim")));
+    if (survivor == SC_NONE) return;
+    if (playerState[survivor] == PlayerState:INCAPPED) return;
+    playerState[survivor] = PlayerState:DOUBLE_CHARGED;
 }
 
 // If a player is cleared from a charger, they should have 1 getup.
 public charger_land_instant(Handle:event, const String:name[], bool:dontBroadcast) {
-    new client = GetClientOfUserId(GetEventInt(event, "victim"));
+    new SurvivorCharacter:survivor = IdentifySurvivor(GetClientOfUserId(GetEventInt(event, "victim")));
+    if (survivor == SC_NONE) return;
     // If the player is incapped when the charger lands, they will getup after being revived.
-    if (playerState[client] == PlayerState:INCAPPED) {
-        pendingGetups[client]++;
+    if (playerState[survivor] == PlayerState:INCAPPED) {
+        pendingGetups[survivor]++;
     }
-    playerState[client] = PlayerState:INSTACHARGED;
+    playerState[survivor] = PlayerState:INSTACHARGED;
 }
 
 public charger_land(Handle:event, const String:name[], bool:dontBroadcast) {
-    new client = GetClientOfUserId(GetEventInt(event, "victim"));
-    if (playerState[client] == PlayerState:INCAPPED) return;
-    playerState[client] = PlayerState:CHARGED;
+    new SurvivorCharacter:survivor = IdentifySurvivor(GetClientOfUserId(GetEventInt(event, "victim")));
+    if (survivor == SC_NONE) return;
+    if (playerState[survivor] == PlayerState:INCAPPED) return;
+    playerState[survivor] = PlayerState:CHARGED;
 }
 
 // If a player is cleared from a charger, they should have 1 getup.
 public charger_clear(Handle:event, const String:name[], bool:dontBroadcast) {
     new client = GetClientOfUserId(GetEventInt(event, "victim"));
-    if (playerState[client] == PlayerState:INCAPPED) return;
-    playerState[client] = PlayerState:CHARGER_GETUP;
+    new SurvivorCharacter:survivor = IdentifySurvivor(client);
+    if (survivor == SC_NONE) return;
+    if (playerState[survivor] == PlayerState:INCAPPED) return;
+    playerState[survivor] = PlayerState:CHARGER_GETUP;
     _GetupTimer(client);
 }
 
 // If a player is incapped, mark that down. This will interrupt their animations, if they have any.
 public player_incap(Handle:event, const String:name[], bool:dontBroadcast) {
-    new client = GetClientOfUserId(GetEventInt(event, "userid"));
+    new SurvivorCharacter:survivor = IdentifySurvivor(GetClientOfUserId(GetEventInt(event, "userid")));
+    if (survivor == SC_NONE) return;
     // If the player is incapped when the charger lands, they will getup after being revived.
-    if (playerState[client] == PlayerState:INSTACHARGED) {
-        pendingGetups[client]++;
+    if (playerState[survivor] == PlayerState:INSTACHARGED) {
+        pendingGetups[survivor]++;
     }
-    playerState[client] = PlayerState:INCAPPED;
+    playerState[survivor] = PlayerState:INCAPPED;
 }
 
 // When a player is picked up, they should have 0 getups.
 public player_revive(Handle:event, const String:name[], bool:dontBroadcast) {
     new client = GetClientOfUserId(GetEventInt(event, "subject"));
-    playerState[client] = PlayerState:UPRIGHT;
+    new SurvivorCharacter:survivor = IdentifySurvivor(client);
+    if (survivor == SC_NONE) return;
+    playerState[survivor] = PlayerState:UPRIGHT;
     _CancelGetup(client);
 }
 
 // A catch-all to handle damage that is not associated with an event. I use this over player_hurt because it ignores godframes.
 public Action:OnTakeDamage(victim, &attacker, &inflictor, &Float:damage, &damagetype)
 {
+    new SurvivorCharacter:survivor = IdentifySurvivor(victim);
+    if (survivor == SC_NONE) return;
     decl String:weapon[32];
     GetEdictClassname(inflictor, weapon, sizeof(weapon));
     if (strcmp(weapon, "weapon_tank_claw") == 0) {
-        if (playerState[victim] == PlayerState:CHARGER_GETUP) {
-            interrupt[victim] = true;
-        } else if (playerState[victim] == PlayerState:DOUBLE_CHARGED) {
-            LogMessage("[Getup] Possible double-getup, player was doublecharged and punched.");
+        if (playerState[survivor] == PlayerState:CHARGER_GETUP) {
+            interrupt[survivor] = true;
+        } else if (playerState[survivor] == PlayerState:DOUBLE_CHARGED) {
+            LogMessage("[Getup] Possible double-getup, player %d was doublecharged and punched.", survivor);
         }
-        playerState[victim] = PlayerState:TANK_PUNCH_GETUP;
+        playerState[survivor] = PlayerState:TANK_PUNCH_GETUP;
         _GetupTimer(victim);
     } else if (strcmp(weapon, "tank_rock") == 0) {
-        if (playerState[victim] == PlayerState:CHARGER_GETUP) {
-            interrupt[victim] = true;
-        } else if (playerState[victim] == PlayerState:DOUBLE_CHARGED) {
-            LogMessage("[Getup] Possible double-getup, player was doublecharged and rocked.");
+        if (playerState[survivor] == PlayerState:CHARGER_GETUP) {
+            interrupt[survivor] = true;
+        } else if (playerState[survivor] == PlayerState:DOUBLE_CHARGED) {
+            LogMessage("[Getup] Possible double-getup, player %d was doublecharged and rocked.", survivor);
         }
-        playerState[victim] = PlayerState:TANK_ROCK_GETUP;
+        playerState[survivor] = PlayerState:TANK_ROCK_GETUP;
         _GetupTimer(victim);
     }
-    return Plugin_Continue;
+    return;
 }
 
 _GetupTimer(client) {
-    if (!isValidTarget(client)) return;
-    pendingGetups[client]++;
     CreateTimer(0.04, GetupTimer, client, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 public Action:GetupTimer(Handle:timer, any:client) {
-    if (currentSequence[client] == 0) {
-        currentSequence[client] = GetEntProp(client, Prop_Send, "m_nSequence");
-        if (DEBUG) LogMessage("[Getup] Player %d is getting up...", client);
+    static SurvivorCharacter:survivor = SC_NONE;
+    if (survivor == SC_NONE) survivor = IdentifySurvivor(client);
+    if (survivor == SC_NONE) return Plugin_Stop;
+    if (currentSequence[survivor] == 0) {
+        if (DEBUG) LogMessage("[Getup] Player %d is getting up...", survivor);
+        currentSequence[survivor] = GetEntProp(client, Prop_Send, "m_nSequence");
+        pendingGetups[survivor]++;
         return Plugin_Continue;
-    } else if (interrupt[client]) {
-        if (DEBUG) LogMessage("[Getup] Player %d's getup was interrupted!", client);
-        interrupt[client] = false;
-        currentSequence[client] = 0;
+    } else if (interrupt[survivor]) {
+        if (DEBUG) LogMessage("[Getup] Player %d's getup was interrupted!", survivor);
+        interrupt[survivor] = false;
+        currentSequence[survivor] = 0;
         return Plugin_Stop;
     }
     
-    if (currentSequence[client] == GetEntProp(client, Prop_Send, "m_nSequence")) {
+    if (currentSequence[survivor] == GetEntProp(client, Prop_Send, "m_nSequence")) {
         return Plugin_Continue;
     } else {
-        if (DEBUG) LogMessage("[Getup] Player %d finished getting up.", client);
-        playerState[client] = PlayerState:UPRIGHT;
-        pendingGetups[client]--;
+        if (DEBUG) LogMessage("[Getup] Player %d finished getting up.", survivor);
+        playerState[survivor] = PlayerState:UPRIGHT;
+        pendingGetups[survivor]--;
         // After a player finishes getting up, cancel any remaining getups.
         _CancelGetup(client);
         return Plugin_Stop;
@@ -224,16 +235,18 @@ public Action:GetupTimer(Handle:timer, any:client) {
 }
 
 _CancelGetup(client) {
-    if (!isValidTarget(client)) return;
     CreateTimer(0.04, CancelGetup, client, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 public Action:CancelGetup(Handle:timer, any:client) {
-    if (pendingGetups[client] == 0) {
-        currentSequence[client] = 0;
+    static SurvivorCharacter:survivor = SC_NONE;
+    if (survivor == SC_NONE) survivor = IdentifySurvivor(client);
+    if (survivor == SC_NONE) return Plugin_Stop;
+    if (pendingGetups[survivor] == 0) {
+        currentSequence[survivor] = 0;
         return Plugin_Stop;
     }
-    if (DEBUG) LogMessage("[Getup] Canceled extra getup for player %d.", client);
-    pendingGetups[client]--;
+    if (DEBUG) LogMessage("[Getup] Canceled extra getup for player %d.", survivor);
+    pendingGetups[survivor]--;
     SetEntPropFloat(client, Prop_Send, "m_flCycle", 1000.0); // Jumps to frame 1000 in the animation, effectively skipping it.
     return Plugin_Continue;
 }
