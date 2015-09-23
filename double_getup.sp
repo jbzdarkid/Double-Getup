@@ -12,7 +12,9 @@
 #include <sdkhooks>
 #define L4D2UTIL_STOCKS_ONLY 1
 #include <l4d2util>
-#define DEBUG true
+#include <l4d2_direct>
+new const bool:DEBUG = true;
+new Handle:rockPunchFix;
 #pragma semicolon 1
 
 public Plugin:myinfo =
@@ -20,16 +22,18 @@ public Plugin:myinfo =
     name = "L4D2 Get-Up Fix",
     author = "Darkid",
     description = "Fixes the problem when, after completing a getup animation, you have another one.",
-    version = "3.0",
+    version = "3.3",
     url = "https://github.com/jbzdarkid/Double-Getup"
 }
 
 public OnPluginStart() {
+    rockPunchFix = CreateConVar("rock_punch_fix", "1", "When a tank punches someone who is getting up from a rock, cause them to have an extra getup.", FCVAR_PLUGIN);
+    
     HookEvent("round_start", round_start);
     HookEvent("tongue_grab", smoker_land);
     HookEvent("tongue_release", smoker_clear);
     HookEvent("pounce_stopped", hunter_clear);
-    HookEvent("charger_impact", double_charge);
+    HookEvent("charger_impact", multi_charge);
     HookEvent("charger_carry_end", charger_land_instant);
     HookEvent("charger_pummel_start", charger_land);
     HookEvent("charger_pummel_end", charger_clear);
@@ -44,9 +48,10 @@ enum PlayerState {
     SMOKED,
     HUNTER_GETUP,
     INSTACHARGED,
-    CHARGED,
+    CHARGED, // 5
     CHARGER_GETUP,
-    DOUBLE_CHARGED,
+    MULTI_CHARGED,
+    TANK_PUNCH_FLY,
     TANK_PUNCH_GETUP,
     TANK_ROCK_GETUP,
 }
@@ -63,8 +68,8 @@ public bool:isGettingUp(any:survivor) {
         return true;
     case (PlayerState:CHARGER_GETUP):
         return true;
-    case (PlayerState:DOUBLE_CHARGED):
-    return true;
+    case (PlayerState:MULTI_CHARGED):
+        return true;
     case (PlayerState:TANK_PUNCH_GETUP):
         return true;
     case (PlayerState:TANK_ROCK_GETUP):
@@ -121,11 +126,11 @@ public hunter_clear(Handle:event, const String:name[], bool:dontBroadcast) {
 }
 
 // If a player is double-charged, they should have 1 getup.
-public double_charge(Handle:event, const String:name[], bool:dontBroadcast) {
+public multi_charge(Handle:event, const String:name[], bool:dontBroadcast) {
     new SurvivorCharacter:survivor = IdentifySurvivor(GetClientOfUserId(GetEventInt(event, "victim")));
     if (survivor == SC_NONE) return;
     if (playerState[survivor] == PlayerState:INCAPPED) return;
-    playerState[survivor] = PlayerState:DOUBLE_CHARGED;
+    playerState[survivor] = PlayerState:MULTI_CHARGED;
 }
 
 // If a player is cleared from a charger, they should have 1 getup.
@@ -186,15 +191,20 @@ public Action:OnTakeDamage(victim, &attacker, &inflictor, &Float:damage, &damage
     if (strcmp(weapon, "weapon_tank_claw") == 0) {
         if (playerState[survivor] == PlayerState:CHARGER_GETUP) {
             interrupt[survivor] = true;
-        } else if (playerState[survivor] == PlayerState:DOUBLE_CHARGED) {
+        } else if (playerState[survivor] == PlayerState:MULTI_CHARGED) {
             LogMessage("[Getup] Possible double-getup, player %d was doublecharged and punched.", survivor);
+        } else if (playerState[survivor] == PlayerState:TANK_ROCK_GETUP) {
+            if (GetConVarBool(rockPunchFix)) {
+                L4D2Direct_DoAnimationEvent(victim, 78); // Charger getup, not punch getup.
+                if (DEBUG) LogMessage("[Getup] Rock-Punch fix: Gave player %d an extra getup.", survivor);
+            }
         }
-        playerState[survivor] = PlayerState:TANK_PUNCH_GETUP;
-        _GetupTimer(victim);
+        playerState[survivor] = PlayerState:TANK_PUNCH_FLY;
+        CreateTimer(0.1, DelayedGetupTimer, victim); // Survivors take 2 frames to enter their getup animation. Why? Valve.
     } else if (strcmp(weapon, "tank_rock") == 0) {
         if (playerState[survivor] == PlayerState:CHARGER_GETUP) {
             interrupt[survivor] = true;
-        } else if (playerState[survivor] == PlayerState:DOUBLE_CHARGED) {
+        } else if (playerState[survivor] == PlayerState:MULTI_CHARGED) {
             LogMessage("[Getup] Possible double-getup, player %d was doublecharged and rocked.", survivor);
         }
         playerState[survivor] = PlayerState:TANK_ROCK_GETUP;
@@ -203,15 +213,19 @@ public Action:OnTakeDamage(victim, &attacker, &inflictor, &Float:damage, &damage
     return;
 }
 
+public Action:DelayedGetupTimer(Handle:timer, any:client) {
+    _GetupTimer(client);
+}
 _GetupTimer(client) {
     CreateTimer(0.04, GetupTimer, client, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 public Action:GetupTimer(Handle:timer, any:client) {
-    static SurvivorCharacter:survivor = SC_NONE;
-    if (survivor == SC_NONE) survivor = IdentifySurvivor(client);
+    new SurvivorCharacter:survivor = IdentifySurvivor(client);
     if (survivor == SC_NONE) return Plugin_Stop;
     if (currentSequence[survivor] == 0) {
-        if (DEBUG) LogMessage("[Getup] Player %d is getting up...", survivor);
+        if (DEBUG && isGettingUp(survivor)) {
+            LogMessage("[Getup] Player %d is getting up...", survivor);
+        }
         currentSequence[survivor] = GetEntProp(client, Prop_Send, "m_nSequence");
         pendingGetups[survivor]++;
         return Plugin_Continue;
@@ -223,6 +237,11 @@ public Action:GetupTimer(Handle:timer, any:client) {
     }
     
     if (currentSequence[survivor] == GetEntProp(client, Prop_Send, "m_nSequence")) {
+        return Plugin_Continue;
+    } else if (playerState[survivor] == PlayerState:TANK_PUNCH_FLY) {
+        // Separate animation for punch fly and punch getup.
+        playerState[survivor] = PlayerState:TANK_PUNCH_GETUP;
+        currentSequence[survivor] = GetEntProp(client, Prop_Send, "m_nSequence");
         return Plugin_Continue;
     } else {
         if (DEBUG) LogMessage("[Getup] Player %d finished getting up.", survivor);
@@ -238,10 +257,10 @@ _CancelGetup(client) {
     CreateTimer(0.04, CancelGetup, client, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 public Action:CancelGetup(Handle:timer, any:client) {
-    static SurvivorCharacter:survivor = SC_NONE;
-    if (survivor == SC_NONE) survivor = IdentifySurvivor(client);
+    new SurvivorCharacter:survivor = IdentifySurvivor(client);
     if (survivor == SC_NONE) return Plugin_Stop;
-    if (pendingGetups[survivor] == 0) {
+    if (pendingGetups[survivor] <= 0) {
+        pendingGetups[survivor] = 0;
         currentSequence[survivor] = 0;
         return Plugin_Stop;
     }
