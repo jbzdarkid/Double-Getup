@@ -22,7 +22,7 @@ public Plugin:myinfo =
     name = "L4D2 Get-Up Fix",
     author = "Darkid",
     description = "Fixes the problem when, after completing a getup animation, you have another one.",
-    version = "3.3",
+    version = "3.4",
     url = "https://github.com/jbzdarkid/Double-Getup"
 }
 
@@ -53,7 +53,8 @@ enum PlayerState {
     MULTI_CHARGED,
     TANK_PUNCH_FLY,
     TANK_PUNCH_GETUP,
-    TANK_ROCK_GETUP,
+    TANK_ROCK_GETUP, // 10
+    PUNCH_FIX,
 }
 
 new pendingGetups[4] = 0; // This is used to track the number of pending getups. The collective opinion is that you should have at most 1.
@@ -125,7 +126,7 @@ public hunter_clear(Handle:event, const String:name[], bool:dontBroadcast) {
     _GetupTimer(client);
 }
 
-// If a player is double-charged, they should have 1 getup.
+// If a player is impacted during a charged, they should have 1 getup.
 public multi_charge(Handle:event, const String:name[], bool:dontBroadcast) {
     new SurvivorCharacter:survivor = IdentifySurvivor(GetClientOfUserId(GetEventInt(event, "victim")));
     if (survivor == SC_NONE) return;
@@ -191,21 +192,22 @@ public Action:OnTakeDamage(victim, &attacker, &inflictor, &Float:damage, &damage
     if (strcmp(weapon, "weapon_tank_claw") == 0) {
         if (playerState[survivor] == PlayerState:CHARGER_GETUP) {
             interrupt[survivor] = true;
-        } else if (playerState[survivor] == PlayerState:MULTI_CHARGED) {
-            LogMessage("[Getup] Possible double-getup, player %d was doublecharged and punched.", survivor);
+        }
+        if (playerState[survivor] == PlayerState:MULTI_CHARGED) {
+            pendingGetups[survivor]++;
         } else if (playerState[survivor] == PlayerState:TANK_ROCK_GETUP) {
             if (GetConVarBool(rockPunchFix)) {
-                L4D2Direct_DoAnimationEvent(victim, 78); // Charger getup, not punch getup.
-                if (DEBUG) LogMessage("[Getup] Rock-Punch fix: Gave player %d an extra getup.", survivor);
+                playerState[survivor] = PlayerState:PUNCH_FIX;
             }
+        } else {
+            playerState[survivor] = PlayerState:TANK_PUNCH_FLY;
         }
-        playerState[survivor] = PlayerState:TANK_PUNCH_FLY;
         CreateTimer(0.1, DelayedGetupTimer, victim); // Survivors take 2 frames to enter their getup animation. Why? Valve.
     } else if (strcmp(weapon, "tank_rock") == 0) {
         if (playerState[survivor] == PlayerState:CHARGER_GETUP) {
             interrupt[survivor] = true;
         } else if (playerState[survivor] == PlayerState:MULTI_CHARGED) {
-            LogMessage("[Getup] Possible double-getup, player %d was doublecharged and rocked.", survivor);
+            pendingGetups[survivor]++;
         }
         playerState[survivor] = PlayerState:TANK_ROCK_GETUP;
         _GetupTimer(victim);
@@ -240,6 +242,12 @@ public Action:GetupTimer(Handle:timer, any:client) {
         return Plugin_Continue;
     } else if (playerState[survivor] == PlayerState:TANK_PUNCH_FLY) {
         // Separate animation for punch fly and punch getup.
+        playerState[survivor] = PlayerState:TANK_PUNCH_GETUP;
+        currentSequence[survivor] = GetEntProp(client, Prop_Send, "m_nSequence");
+        return Plugin_Continue;
+    } else if (playerState[survivor] == PlayerState:PUNCH_FIX) {
+        L4D2Direct_DoAnimationEvent(client, 78); // Charger getup, not punch getup.
+        if (DEBUG) LogMessage("[Getup] Rock-Punch fix: Gave player %d an extra getup.", survivor);
         playerState[survivor] = PlayerState:TANK_PUNCH_GETUP;
         currentSequence[survivor] = GetEntProp(client, Prop_Send, "m_nSequence");
         return Plugin_Continue;
