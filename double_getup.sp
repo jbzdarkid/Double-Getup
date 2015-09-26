@@ -4,9 +4,11 @@
 // Insta-clear hunter during any getup
 // Tank rock on a charger getup
 // Tank punch on a charger getup
+// Tank rock on a multi-charger getup
+// Tank punch on a multi-charge getup
 
-// Tank punch on a double-charge getup
-
+// Test:
+// Charger getup -> Tank rock -> incap (off rock) -> getup when revived
 
 #include <sourcemod>
 #include <sdkhooks>
@@ -22,7 +24,7 @@ public Plugin:myinfo =
     name = "L4D2 Get-Up Fix",
     author = "Darkid",
     description = "Fixes the problem when, after completing a getup animation, you have another one.",
-    version = "3.4",
+    version = "3.6",
     url = "https://github.com/jbzdarkid/Double-Getup"
 }
 
@@ -42,6 +44,9 @@ public OnPluginStart() {
     InitSurvivorModelTrie(); // Not necessary, but speeds up IdentifySurvivor() calls.
 }
 
+// Coach, Nick, Rochelle, Ellis, Louis, Zoey, Bill, Francis
+new tankGetupAnim[8] = {630, 630, 638, 635, 538, 547, 538, 541};
+
 enum PlayerState {
     UPRIGHT = 0,
     INCAPPED,
@@ -53,14 +58,14 @@ enum PlayerState {
     MULTI_CHARGED,
     TANK_PUNCH_FLY,
     TANK_PUNCH_GETUP,
-    TANK_ROCK_GETUP, // 10
-    PUNCH_FIX,
+    TANK_PUNCH_FIX, // 10
+    TANK_ROCK_GETUP,
 }
 
-new pendingGetups[4] = 0; // This is used to track the number of pending getups. The collective opinion is that you should have at most 1.
-new interrupt[4] = false; // If the player was getting up, and that getup is interrupted. This alows us to break out of the GetupTimer loop.
-new currentSequence[4] = 0; // Kept to track when a player changes sequences, i.e. changes animations.
-new PlayerState:playerState[4] = PlayerState:UPRIGHT; // Since there are multiple sequences for each animation, this acts as a simpler way to track a player's state.
+new pendingGetups[8] = 0; // This is used to track the number of pending getups. The collective opinion is that you should have at most 1.
+new interrupt[8] = false; // If the player was getting up, and that getup is interrupted. This alows us to break out of the GetupTimer loop.
+new currentSequence[8] = 0; // Kept to track when a player changes sequences, i.e. changes animations.
+new PlayerState:playerState[8] = PlayerState:UPRIGHT; // Since there are multiple sequences for each animation, this acts as a simpler way to track a player's state.
 
 // If the player is in any of the getup states.
 public bool:isGettingUp(any:survivor) {
@@ -80,13 +85,12 @@ public bool:isGettingUp(any:survivor) {
 }
 
 // Used to check for tank rocks on players getting up from a charge.
-public OnClientPostAdminCheck(client)
-{
+public OnClientPostAdminCheck(client) {
     SDKHook(client, SDKHook_OnTakeDamage, OnTakeDamage);
 }
 
 public round_start(Handle:event, const String:name[], bool:dontBroadcast) {
-    for (new survivor=0; survivor<4; survivor++) {
+    for (new survivor=0; survivor<8; survivor++) {
         playerState[survivor] = PlayerState:UPRIGHT;
     }
 }
@@ -192,17 +196,17 @@ public Action:OnTakeDamage(victim, &attacker, &inflictor, &Float:damage, &damage
     if (strcmp(weapon, "weapon_tank_claw") == 0) {
         if (playerState[survivor] == PlayerState:CHARGER_GETUP) {
             interrupt[survivor] = true;
-        }
-        if (playerState[survivor] == PlayerState:MULTI_CHARGED) {
+        } else if (playerState[survivor] == PlayerState:MULTI_CHARGED) {
             pendingGetups[survivor]++;
-        } else if (playerState[survivor] == PlayerState:TANK_ROCK_GETUP) {
-            if (GetConVarBool(rockPunchFix)) {
-                playerState[survivor] = PlayerState:PUNCH_FIX;
-            }
+        }
+        
+        if (playerState[survivor] == PlayerState:TANK_ROCK_GETUP) {
+            playerState[survivor] = PlayerState:TANK_PUNCH_FIX;
         } else {
             playerState[survivor] = PlayerState:TANK_PUNCH_FLY;
+            // Watches and waits for the survivor to enter their getup animation. It is possible to skip the fly animation, so this can't be tracked by state-based logic.
+            CreateTimer(0.04, TankGetupTimer, victim, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
         }
-        CreateTimer(0.1, DelayedGetupTimer, victim); // Survivors take 2 frames to enter their getup animation. Why? Valve.
     } else if (strcmp(weapon, "tank_rock") == 0) {
         if (playerState[survivor] == PlayerState:CHARGER_GETUP) {
             interrupt[survivor] = true;
@@ -215,9 +219,16 @@ public Action:OnTakeDamage(victim, &attacker, &inflictor, &Float:damage, &damage
     return;
 }
 
-public Action:DelayedGetupTimer(Handle:timer, any:client) {
+public Action:TankGetupTimer(Handle:timer, any:client) {
+    new SurvivorCharacter:survivor = IdentifySurvivor(client);
+    if (survivor == SC_NONE) return Plugin_Stop;
+    if (playerState[survivor] != PlayerState:TANK_PUNCH_FLY) return Plugin_Stop;
+    if (GetEntProp(client, Prop_Send, "m_nSequence") != tankGetupAnim[survivor]) return Plugin_Continue;
+    playerState[survivor] = PlayerState:TANK_PUNCH_GETUP;
     _GetupTimer(client);
+    return Plugin_Stop;
 }
+
 _GetupTimer(client) {
     CreateTimer(0.04, GetupTimer, client, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
@@ -225,14 +236,12 @@ public Action:GetupTimer(Handle:timer, any:client) {
     new SurvivorCharacter:survivor = IdentifySurvivor(client);
     if (survivor == SC_NONE) return Plugin_Stop;
     if (currentSequence[survivor] == 0) {
-        if (DEBUG && isGettingUp(survivor)) {
-            LogMessage("[Getup] Player %d is getting up...", survivor);
-        }
+        if (DEBUG) PrintToChatAll("[Getup] Player %d is getting up...", survivor);
         currentSequence[survivor] = GetEntProp(client, Prop_Send, "m_nSequence");
         pendingGetups[survivor]++;
         return Plugin_Continue;
     } else if (interrupt[survivor]) {
-        if (DEBUG) LogMessage("[Getup] Player %d's getup was interrupted!", survivor);
+        if (DEBUG) PrintToChatAll("[Getup] Player %d's getup was interrupted!", survivor);
         interrupt[survivor] = false;
         currentSequence[survivor] = 0;
         return Plugin_Stop;
@@ -240,19 +249,14 @@ public Action:GetupTimer(Handle:timer, any:client) {
     
     if (currentSequence[survivor] == GetEntProp(client, Prop_Send, "m_nSequence")) {
         return Plugin_Continue;
-    } else if (playerState[survivor] == PlayerState:TANK_PUNCH_FLY) {
-        // Separate animation for punch fly and punch getup.
+    } else if (playerState[survivor] == PlayerState:TANK_PUNCH_FIX && GetConVarBool(rockPunchFix)) {
+        if (DEBUG) PrintToChatAll("[Getup] Rock-Punch fix: Gave player %d an extra getup.", survivor);
+        L4D2Direct_DoAnimationEvent(client, 96);
         playerState[survivor] = PlayerState:TANK_PUNCH_GETUP;
-        currentSequence[survivor] = GetEntProp(client, Prop_Send, "m_nSequence");
-        return Plugin_Continue;
-    } else if (playerState[survivor] == PlayerState:PUNCH_FIX) {
-        L4D2Direct_DoAnimationEvent(client, 78); // Charger getup, not punch getup.
-        if (DEBUG) LogMessage("[Getup] Rock-Punch fix: Gave player %d an extra getup.", survivor);
-        playerState[survivor] = PlayerState:TANK_PUNCH_GETUP;
-        currentSequence[survivor] = GetEntProp(client, Prop_Send, "m_nSequence");
+        currentSequence[survivor] = 0;
         return Plugin_Continue;
     } else {
-        if (DEBUG) LogMessage("[Getup] Player %d finished getting up.", survivor);
+        if (DEBUG) PrintToChatAll("[Getup] Player %d finished getting up.", survivor);
         playerState[survivor] = PlayerState:UPRIGHT;
         pendingGetups[survivor]--;
         // After a player finishes getting up, cancel any remaining getups.
