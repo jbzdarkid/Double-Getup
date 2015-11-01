@@ -30,7 +30,7 @@ public Plugin:myinfo =
 
 new bool:lateLoad;
 new Handle:rockPunchFix;
-new const bool:DEBUG = true;
+new const bool:DEBUG = false;
 
 enum PlayerState {
     UPRIGHT = 0,
@@ -266,7 +266,7 @@ _TankLandTimer(client) {
 public Action:TankLandTimer(Handle:timer, any:client) {
     new SurvivorCharacter:survivor = IdentifySurvivor(client);
     if (survivor == SC_NONE) return Plugin_Stop;
-    // FlyAnim+1 is the landing animation. It doesn't appear if punched while next to a wall, so I skip it.
+    // I consider players to have "landed" only once they stop being in the fly anim or the landing anim (fly + 1).
     if (GetEntProp(client, Prop_Send, "m_nSequence") == tankFlyAnim[survivor] || GetEntProp(client, Prop_Send, "m_nSequence") == tankFlyAnim[survivor] + 1) {
         return Plugin_Continue;
     }
@@ -285,11 +285,7 @@ public Action:TankLandTimer(Handle:timer, any:client) {
     return Plugin_Stop;
 }
 
-public Action:Delay(Handle:timer, any:client) {
-    PrintToChatAll("Extra getup");
-    L4D2Direct_DoAnimationEvent(client, 96); // 96 is the tank punch getup.
-}
-
+// Detects when a player finishes getting up, i.e. their sequence changes.
 _GetupTimer(client) {
     CreateTimer(0.04, GetupTimer, client, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
@@ -327,6 +323,7 @@ public Action:GetupTimer(Handle:timer, any:client) {
     }
 }
 
+// Gets players out of pending animations, i.e. sets their current frame in the animation to 1000.
 _CancelGetup(client) {
     CreateTimer(0.04, CancelGetup, client, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
